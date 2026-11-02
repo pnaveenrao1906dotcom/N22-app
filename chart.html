@@ -1,0 +1,150 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<style>
+html,body{margin:0;height:100%;background:#0b0e11;color:#d1d4dc;font-family:sans-serif;overflow:hidden}
+#c{position:absolute;inset:0}
+#bar{position:absolute;top:6px;left:6px;z-index:5;display:flex;gap:6px;align-items:center}
+button{background:#1e222d;color:#d1d4dc;border:1px solid #363a45;border-radius:6px;padding:6px 10px;font-size:13px}
+button.on{background:#2962ff}
+#info{position:absolute;top:44px;left:8px;z-index:5;font-size:13px;background:#1e222dcc;padding:4px 8px;border-radius:6px;display:none}
+#mode{font-size:12px;color:#f0b90b}
+#warn{font-size:12px;color:#ef5350}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js"></script>
+</head><body>
+<div id="bar"><button id="reset">Reset</button><button id="tl">Trend line</button><button id="clr">Clear</button><span id="mode"></span><span id="warn"></span></div>
+<div id="info"></div><div id="c"></div>
+<script>
+const P = __PAYLOAD__;
+const LW = LightweightCharts;
+const el = document.getElementById('c');
+const info = document.getElementById('info');
+const modeEl = document.getElementById('mode');
+const warnEl = document.getElementById('warn');
+let tlOn = false, picks = [], drawn = [];
+let vert = false, last = 0, touched = false;
+
+// डेटा साफ़ करना: NaN/inf हटाओ, समय यूनिक और बढ़ते क्रम में
+function clean(a) {
+  const m = new Map();
+  for (const d of (a || [])) {
+    if (!d || !Number.isFinite(d.time)) continue;
+    const ok = ('value' in d) ? Number.isFinite(d.value)
+      : (Number.isFinite(d.open) && Number.isFinite(d.high) && Number.isFinite(d.low) && Number.isFinite(d.close));
+    if (ok) m.set(d.time, d);
+  }
+  return [...m.values()].sort((x, y) => x.time - y.time);
+}
+
+const chart = LW.createChart(el, {
+  autoSize: true,
+  layout: {background: {type: 'solid', color: '#0b0e11'}, textColor: '#d1d4dc'},
+  grid: {vertLines: {color: '#1c2030'}, horzLines: {color: '#1c2030'}},
+  crosshair: {mode: 0},
+  rightPriceScale: {borderColor: '#363a45'},
+  timeScale: {borderColor: '#363a45', timeVisible: true, secondsVisible: false},
+  handleScale: {pinch: false, mouseWheel: true,
+                axisPressedMouseMove: {time: true, price: true},
+                axisDoubleClickReset: {time: true, price: true}},
+  handleScroll: {mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false},
+});
+
+let main;
+if (P.type === 'candle') {
+  main = chart.addSeries(LW.CandlestickSeries, {upColor: '#26a69a', downColor: '#ef5350',
+    borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350'}, 0);
+  main.setData(clean(P.ohlc));
+} else if (P.type === 'bar') {
+  main = chart.addSeries(LW.BarSeries, {upColor: '#26a69a', downColor: '#ef5350'}, 0);
+  main.setData(clean(P.ohlc));
+} else {
+  main = chart.addSeries(LW.LineSeries, {color: '#2962ff', lineWidth: 2,
+    lineType: P.type === 'step' ? LW.LineType.WithSteps : LW.LineType.Simple}, 0);
+  main.setData(clean(P.line));
+}
+(P.hlines || []).forEach(h => {
+  try { main.createPriceLine({price: h.price, color: h.color, lineWidth: 1, lineStyle: 2, title: h.title}); } catch (e) {}
+});
+
+// हर इंडिकेटर अलग try/catch में: एक फ़ेल हो तो बाक़ी चलते रहें
+const failed = [];
+P.ind.forEach(s => {
+  try {
+    let ser;
+    if (s.kind === 'hist') {
+      ser = chart.addSeries(LW.HistogramSeries, {color: s.color, priceLineVisible: false, title: s.name}, s.pane);
+    } else {
+      ser = chart.addSeries(LW.LineSeries, {color: s.color, lineWidth: s.width || 1,
+        priceLineVisible: false, lastValueVisible: true, title: s.name}, s.pane);
+    }
+    ser.setData(clean(s.data));
+    (s.hlines || []).forEach(h => ser.createPriceLine({price: h.price, color: h.color, lineWidth: 1, lineStyle: 2, title: h.title}));
+  } catch (e) { failed.push(s.name); console.error(s.name, e); }
+});
+if (failed.length) warnEl.textContent = '⚠ ' + failed.join(', ');
+
+try {
+  chart.panes().forEach((pn, i) => pn.setStretchFactor(i === 0 ? 3 : 1));
+} catch (e) {}
+
+const n = P.times.length;
+chart.timeScale().setVisibleLogicalRange({from: Math.max(0, n - 150), to: n + 5});
+
+document.getElementById('reset').onclick = () => {
+  chart.timeScale().setVisibleLogicalRange({from: Math.max(0, n - 150), to: n + 5});
+  try {
+    for (let i = 0; i < chart.panes().length; i++) chart.priceScale('right', i).applyOptions({autoScale: true});
+  } catch (e) {}
+};
+
+function toggleVert() {
+  if (tlOn) return;
+  vert = !vert;
+  chart.applyOptions({handleScroll: {mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: vert}});
+  modeEl.textContent = vert ? '↕ free move ON' : '';
+}
+el.addEventListener('touchend', () => {
+  touched = true;
+  const t = Date.now();
+  if (t - last < 350) { toggleVert(); last = 0; } else { last = t; }
+}, {passive: true});
+el.addEventListener('dblclick', () => { if (touched) { touched = false; return; } toggleVert(); });
+
+document.getElementById('tl').onclick = function () {
+  tlOn = !tlOn; picks = []; this.classList.toggle('on', tlOn);
+  if (tlOn && vert) { vert = false; modeEl.textContent = ''; chart.applyOptions({handleScroll: {vertTouchDrag: false}}); }
+};
+document.getElementById('clr').onclick = () => {
+  drawn.forEach(s => chart.removeSeries(s)); drawn = []; info.style.display = 'none';
+};
+function idxOf(t) {
+  let lo = 0, hi = P.times.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (P.times[m] < t) lo = m + 1; else hi = m; }
+  return lo;
+}
+function fmt(sec) {
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  return (d ? d + 'd ' : '') + (h ? h + 'h ' : '') + m + 'm';
+}
+function draw(a, b) {
+  if (a.time === b.time) return;
+  if (a.time > b.time) { const t = a; a = b; b = t; }
+  const ls = chart.addSeries(LW.LineSeries, {color: '#ffeb3b', lineWidth: 2, priceLineVisible: false,
+    lastValueVisible: false, crosshairMarkerVisible: false}, 0);
+  ls.setData([{time: a.time, value: a.price}, {time: b.time, value: b.price}]);
+  drawn.push(ls);
+  const pts = b.price - a.price, pct = (b.price / a.price - 1) * 100;
+  const bars = idxOf(b.time) - idxOf(a.time);
+  info.style.display = 'block';
+  info.textContent = (pts >= 0 ? '+' : '') + pts.toFixed(2) + ' pts | ' + (pct >= 0 ? '+' : '') +
+    pct.toFixed(2) + '% | ' + bars + ' bars | ' + fmt(b.time - a.time);
+}
+chart.subscribeClick(p => {
+  if (!tlOn || !p.point || p.time === undefined) return;
+  if (p.paneIndex !== undefined && p.paneIndex !== 0) return;
+  const price = main.coordinateToPrice(p.point.y);
+  if (price === null) return;
+  picks.push({time: p.time, price: price});
+  if (picks.length === 2) { draw(picks[0], picks[1]); picks = []; }
+});
+</script></body></html>
