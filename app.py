@@ -296,6 +296,7 @@ for name, p in active.items():
         except Exception as e:
             st.warning(f"{name}/{l.get('name')}: {e}")
 payload["ind"], payload["hlines"] = series, hl_main
+st.caption(f"Indicators ON: {list(active)} | lines: {len(series)} | sub-panes: {pane_i} | bars: {len(view)}")
 
 # ---------------- tabs ----------------
 tab1, tab2 = st.tabs(["Chart", "Option chain"])
