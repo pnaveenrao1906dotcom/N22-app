@@ -198,7 +198,7 @@ ctx = {"symbols": symbols, "comp": symbols[comp_name]["close"] if comp_name else
 
 # ---------------- indicators UI ----------------
 active = {}
-with c1.popover("fx  Indicators"):
+with st.expander("fx  Indicators"):
     for name, spec in ind.REG.items():
         if st.checkbox(name, key=f"on_{name}"):
             with st.container(border=True):
